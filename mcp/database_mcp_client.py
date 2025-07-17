@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from database_config import (
     get_table_config, 
     get_table_name_from_natural_language,
+    get_table_and_sql_from_natural_language,
     get_time_mapping,
     TableConfig
 )
@@ -302,6 +303,37 @@ class DatabaseMCPClient:
                 "natural_language": natural_language,
                 "message": "查询失败"
             }
+    
+    async def execute_natural_language_query_optimized(self, natural_language: str) -> Dict[str, Any]:
+        """使用DeepSeek优化的自然语言查询方法，一次性获取表名和SQL"""
+        try:
+            # 使用优化的函数同时获取表名和SQL
+            table_name, sql_query = get_table_and_sql_from_natural_language(natural_language, self.db_type)
+            
+            if not sql_query:
+                # 如果没有获取到SQL，回退到原来的方法
+                return await self.execute_natural_language_query(natural_language, table_name)
+            
+            # 执行查询
+            results = await self.execute_query(sql_query)
+            
+            return {
+                "status": "success",
+                "data": results,
+                "count": len(results),
+                "table_name": table_name,
+                "sql_query": sql_query,
+                "natural_language": natural_language,
+                "message": f"查询成功，共找到 {len(results)} 条记录"
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "natural_language": natural_language,
+                "message": "查询失败"
+            }
 
 # 同步包装函数
 def query_new_users_count_sync(natural_language: str, table_name: str = None) -> Dict[str, Any]:
@@ -324,6 +356,16 @@ def execute_natural_language_query_sync(natural_language: str, table_name: str =
     finally:
         loop.close()
 
+def execute_natural_language_query_optimized_sync(natural_language: str) -> Dict[str, Any]:
+    """同步版本的优化自然语言查询"""
+    client = DatabaseMCPClient()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(client.execute_natural_language_query_optimized(natural_language))
+    finally:
+        loop.close()
+
 if __name__ == "__main__":
     # 测试示例
     async def test():
@@ -336,6 +378,10 @@ if __name__ == "__main__":
         # 测试其他自然语言查询
         result2 = await client.execute_natural_language_query("查询最近30天注册的用户")
         print("查询结果:", json.dumps(result2, ensure_ascii=False, indent=2))
+        
+        # 测试优化的自然语言查询
+        result3 = await client.execute_natural_language_query_optimized("查询最近7天的订单数量")
+        print("优化查询结果:", json.dumps(result3, ensure_ascii=False, indent=2))
     
     # 运行测试
     asyncio.run(test())
