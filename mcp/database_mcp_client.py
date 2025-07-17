@@ -221,21 +221,27 @@ class DatabaseMCPClient:
     
     async def query_new_users_count(self, natural_language: str, table_name: str = None) -> Dict[str, Any]:
         """统计新增用户数量的主要方法"""
-        try:
-            # 如果没有指定表名，从自然语言中推断
-            if table_name is None:
-                table_name = get_table_name_from_natural_language(natural_language)
-            
+        # 如果指定了表名，使用传统方法；否则使用优化方法
+        if table_name is not None:
             # 获取表配置
             table_config = get_table_config(table_name)
-            
+
             # 获取表结构
             table_schema = await self.get_table_schema(table_name)
-            
+
             # 生成SQL查询
             sql_query = await self._generate_sql_from_natural_language(natural_language, table_config, table_schema)
-            
-            # 执行查询
+        else:
+            # 使用优化的方法直接获取表名和SQL
+            table_name, sql_query = get_table_and_sql_from_natural_language(natural_language, self.db_type)
+
+            if not sql_query:
+                # 如果没有获取到SQL，回退到传统方法
+                table_config = get_table_config(table_name)
+                table_schema = await self.get_table_schema(table_name)
+                sql_query = await self._generate_sql_from_natural_language(natural_language, table_config, table_schema)
+
+        # 执行查询
             results = await self.execute_query(sql_query)
             
             # 提取用户数量
