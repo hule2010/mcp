@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from openai import OpenAI
 from dotenv import load_dotenv
+from database_config import (
+    get_table_config, 
+    get_table_name_from_natural_language,
+    get_time_mapping,
+    TableConfig
+)
 
 # 加载环境变量
 load_dotenv()
@@ -44,7 +50,7 @@ class DatabaseMCPClient:
         }
         
         # 默认数据库类型
-        self.db_type = os.getenv("DATABASE_TYPE", "mysql")
+        self.db_type = os.getenv("DATABASE_TYPE", "postgresql")
         
         # 数据库引擎
         self.engine = None
@@ -76,34 +82,58 @@ class DatabaseMCPClient:
             print(f"数据库初始化失败: {str(e)}")
             raise
     
-    def _create_sql_generation_prompt(self, natural_language: str, table_schema: Optional[str] = None) -> str:
+    def _create_sql_generation_prompt(self, natural_language: str, table_config: Optional[TableConfig] = None, table_schema: Optional[str] = None) -> str:
         """创建SQL生成的提示词"""
         schema_info = ""
         if table_schema:
             schema_info = f"\n数据库表结构:\n{table_schema}\n"
         
+        # 添加表配置信息
+        config_info = ""
+        if table_config:
+            config_info = f"""
+表配置信息:
+- 表名: {table_config.table_name}
+- 表描述: {table_config.description}
+- 时间字段: {table_config.time_field}
+- 主键: {table_config.primary_key}
+- 字段说明: {json.dumps(table_config.fields, ensure_ascii=False, indent=2)}
+"""
+        
+        # 获取时间映射
+        time_mapping = get_time_mapping(self.db_type)
+        time_examples = ""
+        if time_mapping:
+            time_examples = f"""
+时间查询示例（{self.db_type.upper()}）:
+"""
+            for desc, sql in list(time_mapping.items())[:5]:  # 只显示前5个示例
+                time_examples += f"- {desc}: {sql}\n"
+        
         return f"""你是一个SQL查询专家。用户会用自然语言描述他们想要查询的数据，你需要将其转换为SQL查询语句。
 
+{config_info}
 {schema_info}
+{time_examples}
 
 用户查询: {natural_language}
 
 请根据用户的自然语言描述生成相应的SQL查询语句。
 
 要求:
-1. 生成的SQL必须是有效的，符合标准SQL语法
-2. 如果涉及时间查询，请使用适当的日期函数
-3. 对于"近一年"这样的时间描述，请使用当前时间减去一年的方式
-4. 只返回SQL语句，不要包含其他解释
-5. 如果需要统计数量，使用COUNT()函数
-6. 确保查询的安全性，避免SQL注入
+1. 生成的SQL必须是有效的，符合{self.db_type.upper()}语法
+2. 如果涉及时间查询，请使用上述时间查询示例中的格式
+3. 对于统计查询，使用COUNT()函数
+4. 确保查询的安全性，避免SQL注入
+5. 只返回SQL语句，不要包含其他解释
+6. 如果表配置中指定了时间字段，请使用该字段名
 
 请直接返回SQL查询语句:"""
     
-    async def _generate_sql_from_natural_language(self, natural_language: str, table_schema: Optional[str] = None) -> str:
+    async def _generate_sql_from_natural_language(self, natural_language: str, table_config: Optional[TableConfig] = None, table_schema: Optional[str] = None) -> str:
         """使用DeepSeek将自然语言转换为SQL查询"""
         try:
-            prompt = self._create_sql_generation_prompt(natural_language, table_schema)
+            prompt = self._create_sql_generation_prompt(natural_language, table_config, table_schema)
             
             response = self.llm_client.chat.completions.create(
                 model="deepseek-chat",
@@ -188,14 +218,21 @@ class DatabaseMCPClient:
             print(f"获取表结构失败: {str(e)}")
             return ""
     
-    async def query_new_users_count(self, natural_language: str, table_name: str = "users") -> Dict[str, Any]:
+    async def query_new_users_count(self, natural_language: str, table_name: str = None) -> Dict[str, Any]:
         """统计新增用户数量的主要方法"""
         try:
+            # 如果没有指定表名，从自然语言中推断
+            if table_name is None:
+                table_name = get_table_name_from_natural_language(natural_language)
+            
+            # 获取表配置
+            table_config = get_table_config(table_name)
+            
             # 获取表结构
             table_schema = await self.get_table_schema(table_name)
             
             # 生成SQL查询
-            sql_query = await self._generate_sql_from_natural_language(natural_language, table_schema)
+            sql_query = await self._generate_sql_from_natural_language(natural_language, table_config, table_schema)
             
             # 执行查询
             results = await self.execute_query(sql_query)
@@ -214,10 +251,11 @@ class DatabaseMCPClient:
             return {
                 "status": "success",
                 "natural_language": natural_language,
+                "table_name": table_name,
                 "generated_sql": sql_query,
                 "user_count": user_count,
                 "raw_results": results,
-                "message": f"近一年新增用户数量: {user_count}"
+                "message": f"查询结果: {user_count}"
             }
             
         except Exception as e:
@@ -228,14 +266,21 @@ class DatabaseMCPClient:
                 "message": "查询失败"
             }
     
-    async def execute_natural_language_query(self, natural_language: str, table_name: str = "users") -> Dict[str, Any]:
+    async def execute_natural_language_query(self, natural_language: str, table_name: str = None) -> Dict[str, Any]:
         """执行自然语言查询的通用方法"""
         try:
+            # 如果没有指定表名，从自然语言中推断
+            if table_name is None:
+                table_name = get_table_name_from_natural_language(natural_language)
+            
+            # 获取表配置
+            table_config = get_table_config(table_name)
+            
             # 获取表结构
             table_schema = await self.get_table_schema(table_name)
             
             # 生成SQL查询
-            sql_query = await self._generate_sql_from_natural_language(natural_language, table_schema)
+            sql_query = await self._generate_sql_from_natural_language(natural_language, table_config, table_schema)
             
             # 执行查询
             results = await self.execute_query(sql_query)
@@ -243,6 +288,7 @@ class DatabaseMCPClient:
             return {
                 "status": "success",
                 "natural_language": natural_language,
+                "table_name": table_name,
                 "generated_sql": sql_query,
                 "results": results,
                 "result_count": len(results),
@@ -258,7 +304,7 @@ class DatabaseMCPClient:
             }
 
 # 同步包装函数
-def query_new_users_count_sync(natural_language: str, table_name: str = "users") -> Dict[str, Any]:
+def query_new_users_count_sync(natural_language: str, table_name: str = None) -> Dict[str, Any]:
     """同步版本的新增用户统计"""
     client = DatabaseMCPClient()
     loop = asyncio.new_event_loop()
@@ -268,7 +314,7 @@ def query_new_users_count_sync(natural_language: str, table_name: str = "users")
     finally:
         loop.close()
 
-def execute_natural_language_query_sync(natural_language: str, table_name: str = "users") -> Dict[str, Any]:
+def execute_natural_language_query_sync(natural_language: str, table_name: str = None) -> Dict[str, Any]:
     """同步版本的自然语言查询"""
     client = DatabaseMCPClient()
     loop = asyncio.new_event_loop()
