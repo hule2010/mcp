@@ -6,4 +6,11 @@ openai  # For DeepSeek API compatibility
 python-dotenv  # For environment variables
 aiohttp  # For async HTTP calls
 typing-extensions  # For enhanced typing
-pydantic-settings  # For configuration management 
+pydantic-settings  # For configuration management
+# 数据库相关依赖
+sqlalchemy  # ORM框架
+pymysql  # MySQL驱动
+psycopg2-binary  # PostgreSQL驱动
+sqlite3  # SQLite驱动（Python内置）
+asyncpg  # 异步PostgreSQL驱动
+aiomysql  # 异步MySQL驱动 
