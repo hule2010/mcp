@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+openai  # For DeepSeek API compatibility
+python-dotenv  # For environment variables
+aiohttp  # For async HTTP calls
+typing-extensions  # For enhanced typing
+pydantic-settings  # For configuration management 
